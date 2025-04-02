@@ -60,7 +60,7 @@ extern UINT32 g_uIsUserConfig;
 
 INT fmiSMCheckRB()
 {
-    SetTimer(3000);
+    SetTimer(5000);	//bug fix, NAND flash all blocks are bad blocks
     while(1) {
         if((inpw(REG_NANDINTSTS) & 0x400)) { /* RB0_IF */
             //while(! (inpw(REG_NANDINTSTS) & 0x40000) );
@@ -463,8 +463,8 @@ INT fmiSM_ReadID(FMI_SM_INFO_T *pSM)
                 pSM->uPageSize = 2048;
                 return 1;
             }
+            IsID=1;	//NuWriter commit 419dde6
         }
-        IsID=1;
     }
 
     //if((u32PowerOn&0x3C0)!=0x3C0 ) {
@@ -1068,6 +1068,7 @@ INT fmiSM_Write_large_page(UINT32 uSector, UINT32 ucColAddr, UINT32 uSAddr)
     outpw(REG_FMI_DMASA, uSAddr);   // set DMA transfer starting address
 
     // set the spare area configuration
+    memset((void *)REG_NANDRA0, 0xFF, 64);	//NuWriter commit 30c0b42
     /* write byte 2050, 2051 as used page */
     outpw(REG_NANDRA0, 0x0000FFFF);
 
