@@ -11,6 +11,7 @@
 #include "etimer.h"
 #include "fmi.h"
 #include "sd.h"
+#include "gpio.h"
 
 #ifndef MSG_DEBUG_EN
 #define MSG_DEBUG(...)
@@ -922,7 +923,7 @@ INT fmiSM_EraseBad(UINT32 uChipSel,UINT32 start, UINT32 len)
 //-----------------------------------------------------
 INT fmiSM_ChipErase(UINT32 uChipSel)
 {
-    int i, status;
+    int i, status, led2_state;
     int volatile badBlock=0;
 
     // erase all chip
@@ -934,6 +935,19 @@ INT fmiSM_ChipErase(UINT32 uChipSel)
 #endif
         {
             status = fmiSM_BlockErase(pSM, i);
+						// Toggle LED2
+						if (i % 32 == 0 && i != 0) {  // Skip 0 to avoid toggling immediately
+							led2_state = !led2_state;
+							if(led2_state){
+								GPIO_SetMode(PB, BIT2, GPIO_MODE_OUTPUT);	//LED2 Green
+								PB2 = 0;
+								//printf("LED ON\n");
+							}
+							else{
+								//printf("LED OFF\n");
+								GPIO_SetMode(PB, BIT2, GPIO_MODE_INPUT);	//LED2 Green
+							}
+						}
             if (status < 0) {
                 fmiMarkBadBlock(pSM, i);
                 badBlock++;

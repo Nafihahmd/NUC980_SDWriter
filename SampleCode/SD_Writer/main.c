@@ -18,6 +18,7 @@
 #include "sdglue2.h"
 #include "spinandflash.h"
 #include "filesystem.h"
+#include "gpio.h"		// Added for LED indication
 
 extern int spiInit();
 int spiEraseAll(void);
@@ -561,6 +562,28 @@ void SYS_Init(void)
     //SD_Drv = 0;
 }
 
+void GPIO_Init(void)
+{	
+		printf("Enable GPIO clock\n\n");
+    outpw(REG_CLK_HCLKEN,  inpw(REG_CLK_HCLKEN)  | (1<<11)); //Enable GPIO clock	
+	
+		printf("Clear GPIO G MFP Register\n\n");
+		/* Enable GPIOA clock (example for GPIOA) */
+		//outpw(REG_CLK_PCLKEN0, inpw(REG_CLK_PCLKEN0) | (1 << 0)); // Bit 0 for GPIOA
+		
+		// Clear Multi-function pin settings for PG3, PG5, PB2
+		outpw(REG_SYS_GPG_MFPL, inpw(REG_SYS_GPG_MFPL) & ~(0xF << 12)); // PG3 (bits 15:12)
+		outpw(REG_SYS_GPG_MFPL, inpw(REG_SYS_GPG_MFPL) & ~(0xF << 20)); // PG5 (bits 23:20)
+		outpw(REG_SYS_GPB_MFPL, inpw(REG_SYS_GPB_MFPL) & ~(0xF << 8));  // PB2 (bits 11:8)
+		
+		
+		// Set LED GPIOs to output mode
+		printf("GPIO set as Output\n\n");
+		GPIO_SetMode(PG, BIT3 | BIT5, GPIO_MODE_OUTPUT);
+		GPIO_SetMode(PB, BIT2, GPIO_MODE_OUTPUT);
+
+}
+
 /*---------------------------------------------------------*/
 /* User Provided RTC Function for FatFs module             */
 /*---------------------------------------------------------*/
@@ -848,8 +871,7 @@ int32_t main(void)
     printf("===============================================\n");
     printf("          SD Writer                            \n");
     printf("===============================================\n");
-
-    sysDisableCache();
+		sysDisableCache();
     sysFlushCache(I_D_CACHE);
     sysEnableCache(CACHE_WRITE_BACK);
 
@@ -857,12 +879,21 @@ int32_t main(void)
     Block_Buff = (BYTE *)((UINT32)&Block_Buff_Pool[0] | 0x80000000);   /* use non-cache buffer */
 
     SYS_Init();
+		GPIO_Init();		
+		PG3 = 1; PB2 = 1;PG5 = 1;	//Setting All LEDs RED to show SDWriter has started properly
+		
     WDT_RSTCNT;
     outpw(REG_WDT_CTL, (inpw(REG_WDT_CTL) & ~(0xf << 8))|(0x8<<8));// timeout 2^20 * (12M/512) = 44 sec
 
     ETimer1_Init();
     fmiHWInit();
-
+		DelayMicrosecond(120000);
+		PG3= 0; PB2 = 0; PG5 = 0;		//ALL LEDs Green
+		DelayMicrosecond(120000);
+		GPIO_SetMode(PB, BIT2, GPIO_MODE_INPUT);	//LED2 OFF
+		GPIO_SetMode(PG, BIT3|BIT5, GPIO_MODE_INPUT);	//LED1&3 OFF
+		DelayMicrosecond(300000);
+		
     if (((inpw(REG_SYS_PWRON) & 0x00000300) == 0x300)) {
         /* Use SD0 */
         printf("Reading SD card in SD port 0 .....\n\n");
@@ -878,6 +909,9 @@ int32_t main(void)
     } else {
         /* Use SD1 */
         printf("Reading SD card in SD port 1 .....\n\n");
+				/* Identified right Port. Set LED 1 Green */
+				GPIO_SetMode(PG, BIT3, GPIO_MODE_OUTPUT);	//LED3 OFF
+				PG3 = 0;	//LED1 Green
         sd_path[0] = '1';
         sysInstallISR(IRQ_LEVEL_1, IRQ_SDH, (PVOID)SDH_IRQHandler);
         /* enable CPSR I bit */
@@ -1549,6 +1583,7 @@ _retry_spinand_3:
     }
     if (Ini_Writer.Type == TYPE_NAND) {
         uint32_t chip_size;
+			int led3_state;
 
         printf("Write Type is NAND flash\n");
         /* initial NAND */
@@ -1577,8 +1612,18 @@ _retry_spinand_3:
                 printf("EraseStart = %d, EraseLength = %d\n",Ini_Writer.Erase.EraseStart,Ini_Writer.Erase.EraseLength);
                 bad_block = fmiSM_Erase(0,Ini_Writer.Erase.EraseStart,Ini_Writer.Erase.EraseLength);
                 printf("total %d bad block\n", bad_block);
-            }
+            }					
+						
+					if(bad_block<5){	/* LED 2 GREEN*/						
+						GPIO_SetMode(PB, BIT2, GPIO_MODE_OUTPUT);	//LED2 OUTPUT
+						PG2 = 0;	//LED2 Green
+					}
+					else{	/* LED 2 RED*/					
+						GPIO_SetMode(PB, BIT2, GPIO_MODE_OUTPUT);	//LED2 OUTPUT
+						PG2 = 1;	//LED2 Red
+					}
         }
+				
 
         if (Ini_Writer.Loader.user_choice == 1) {
             unsigned int header_size;
@@ -1587,6 +1632,8 @@ _retry_spinand_3:
             //Burn Loader to NAND flash
             WDT_RSTCNT;
             printf("Write [%s] to NAND flash ... start\n",Ini_Writer.Loader.FileName);
+						// Turn OFF LED3
+						GPIO_SetMode(PG, BIT5, GPIO_MODE_INPUT);	//LED3 OFF
             Form_BootCode_Header(&header_size);
             page_count = (Ini_Writer.Loader_size + header_size)/pSM->uPageSize;
             end_blk = 4;
@@ -1610,6 +1657,8 @@ _retry_spinand_3:
 _retry_1:
                 if (blkindx > pSM->uBlockPerFlash) {
                     printf("Write out of NAND flash!\n");
+										GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED2 Red
+										PG5 = 1;
                     while(1) {
                         WDT_RSTCNT;
                     }
@@ -1660,6 +1709,9 @@ _retry_1:
                 f_close(&file2);
             }
             printf("Write [%s] to NAND flash ... done\n",Ini_Writer.Loader.FileName);
+						//Turn LED3 Green
+						GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED3 Green
+						PG5 = 0;
         }
 
         if (Ini_Writer.UserImage[0].user_choice == 1) {
@@ -1676,7 +1728,9 @@ _retry_1:
 
                 //Burn to NAND flash
                 printf("Write [%s] size [%d] to NAND flash offset [0x%x] ... start\n", Ini_Writer.UserImage[ImgNo].FileName, Ini_Writer.UserImage[ImgNo].DataSize, Ini_Writer.UserImage[ImgNo].address);
-
+								
+								// Turn OFF LED3
+								GPIO_SetMode(PG, BIT5, GPIO_MODE_INPUT);	//LED3 OFF
                 startblk = Ini_Writer.UserImage[ImgNo].address/((pSM->uPagePerBlock)*(pSM->uPageSize));
                 endblk = startblk + (Ini_Writer.UserImage[ImgNo].DataSize/((pSM->uPagePerBlock)*(pSM->uPageSize)));
                 printf("startblk[%d], endblk[%d]\n",startblk,endblk);
@@ -1696,6 +1750,8 @@ _retry_2:
 
                     if (blkindx > pSM->uBlockPerFlash) {
                         printf("Write out of NAND flash!\n");
+												GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED2 Red
+												PG5 = 1;
                         while(1) {
                             WDT_RSTCNT;
                         }
@@ -1703,6 +1759,19 @@ _retry_2:
                     page = pSM->uPagePerBlock * (blkindx);
                     printf("Erase block [%d]\n",blkindx);
                     status = fmiSM_BlockErase(pSM, blkindx);
+										// Toggle LED3 as this process going to take a lot of time
+										if (blkindx % 4) {  // Skip 0 to avoid toggling immediately
+											led3_state = !led3_state;
+											if(led3_state){
+												GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED2 Green
+												PG5 = 0;
+												//printf("LED ON\n");
+											}
+											else{
+												//printf("LED OFF\n");
+												GPIO_SetMode(PG, BIT5, GPIO_MODE_INPUT);	//LED2 Green
+											}
+										}
                     if (status != 0) {
                         fmiMarkBadBlock(pSM, blkindx);
                         printf("Bad block [%d]\n",blkindx);
@@ -1736,6 +1805,9 @@ _retry_2:
 
                 f_close(&file2);
                 printf("Write [%s] to NAND flash ... done\n", Ini_Writer.UserImage[ImgNo].FileName);
+								//Turn LED3 Green
+								GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED3 Green
+								PG5 = 0;
             }
         }
 
@@ -1779,6 +1851,8 @@ _retry_2:
 _retry_3:
             if (blkindx > pSM->uBlockPerFlash) {
                 printf("Write out of NAND flash!\n");
+								GPIO_SetMode(PG, BIT5, GPIO_MODE_OUTPUT);	//LED2 Red
+								PG5 = 1;
                 while(1) {
                     WDT_RSTCNT;
                 }
